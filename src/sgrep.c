@@ -27,7 +27,7 @@
  * or the first matching line.  Sgrep outputs matching lines until it
  * encounters a non matching line.
  *
- * Usage:  sgrep [ -i | -n ] [ -c ] [ -b ] [ -r ] key [ sorted_file ... ]
+ * Usage:  sgrep [ -i | -n ] [ -c ] [ -b ] [ -r ] [ -x ] key [ sorted_file ... ]
  *
  * If no input file is specified, then sgrep uses stdin.
  *
@@ -46,6 +46,10 @@
  *
  * The -r flag specifies that the file is sorted in reverse
  * (descending) order using "sort -r".
+ *
+ * The -x flag specifies only those matches that exactly match the
+ * whole line. In terms of regular expressions this is like
+ * surrounding it with ^ and $.
  *
  * Author:  Stephen C. Losen   University of Virginia
  */
@@ -241,25 +245,49 @@ binsrch(const char *key, FILE *fp, int reverse) {
 
 static void
 printmatch(const char *key, FILE *fp, off_t start,
-    const char *fname, int cflag)
+    const char *fname, int cflag, int xflag)
 {
-    int c, count;
+    int c, count, size, keylen;
 
     if (start >= 0) {
         fseeko(fp, start, SEEK_SET);
     }
-    for (count = 0; start >= 0 && compare(key, fp) == 0; count++) {
+    for (count = 0; start >= 0 && compare(key, fp) == 0;) {
         fseeko(fp, start, SEEK_SET);
-        if (cflag == 0 && fname != 0) {
+        if (cflag == 0 && xflag == 0 && fname != 0) {
             fputs(fname, stdout);
             fputc(':', stdout);
         }
-        while ((c = getc(fp)) != EOF) {
+        for (size = 1; (c = getc(fp)) != EOF; size++) {
             start++;
-            if (cflag == 0) {
+            if (cflag == 0 && xflag == 0) {
                 fputc(c, stdout);
             }
             if (c == '\n') {
+                if (xflag != 0) {
+                    /* Include newline character */
+                    keylen = strlen(key) + 1;
+                    if (size == keylen) {
+                        count++;
+                        if (cflag == 0) {
+                            if (fname != 0) {
+                                fputs(fname, stdout);
+                                fputc(':', stdout);
+                            }
+                            /* Includes matched newline */
+                            fseeko(fp, -size, SEEK_CUR);
+                            for (; size > 0; size--) {
+                                c = getc(fp);
+                                fputc(c, stdout);
+                            }
+                        }
+                    } else if (size > keylen) {
+                        /* Terminate matching, larger size will never match */
+                        goto printcount;
+                    }
+                } else {
+                    count++;
+                }
                 break;
             }
         }
@@ -267,6 +295,8 @@ printmatch(const char *key, FILE *fp, off_t start,
             break;
         }
     }
+
+printcount:
     if (cflag != 0) {
         if (fname != 0) {
             fputs(fname, stdout);
@@ -281,7 +311,7 @@ main(int argc, char **argv) {
     FILE *fp;
     const char *key = 0;
     int i, numfile, status;
-    int bflag = 0, cflag = 0, iflag = 0, nflag = 0, rflag = 0;
+    int bflag = 0, cflag = 0, iflag = 0, nflag = 0, rflag = 0, xflag = 0;
     off_t where;
     struct stat st;
     extern int optind, opterr;
@@ -289,7 +319,7 @@ main(int argc, char **argv) {
     /* parse command line options */
 
     opterr = 0;
-    while ((i = getopt(argc, argv, "bcfinr")) > 0 && i != '?') {
+    while ((i = getopt(argc, argv, "bcfinrx")) > 0 && i != '?') {
         switch(i) {
         case 'b':
             bflag++;
@@ -309,10 +339,13 @@ main(int argc, char **argv) {
         case 'r':
             rflag++;
             break;
+        case 'x':
+            xflag++;
+            break;
         }
     }
     if (i == '?' || optind >= argc) {
-        fputs ("Usage: sgrep [ -i | -n ] [ -c ] [ -b ] [ -r ] key "
+        fputs ("Usage: sgrep [ -i | -n ] [ -c ] [ -b ] [ -r ] [ -x ] key "
             "[ sorted_file ... ]\n", stderr);
         exit(2);
     }
@@ -340,7 +373,7 @@ main(int argc, char **argv) {
             exit(2);
         }
         where = binsrch(key, stdin, rflag);
-        printmatch(key, stdin, where, 0, cflag);
+        printmatch(key, stdin, where, 0, cflag, xflag);
         exit(where < 0);
     }
 
@@ -360,7 +393,7 @@ main(int argc, char **argv) {
             continue;
         }
         where = binsrch(key, fp, rflag);
-        printmatch(key, fp, where, numfile == 1 ? 0 : argv[i], cflag);
+        printmatch(key, fp, where, numfile == 1 ? 0 : argv[i], cflag, xflag);
         if (status == 1 && where >= 0) {
             status = 0;
         }
